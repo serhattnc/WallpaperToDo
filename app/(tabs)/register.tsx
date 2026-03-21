@@ -1,12 +1,13 @@
-import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, Alert } from 'react-native';
-import { Stack, Link, useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { AntDesign, Feather } from '@expo/vector-icons';
+import AppLogo from '@/components/app-logo';
 import { supabase } from '@/constants/supabase';
+import { AntDesign } from '@expo/vector-icons';
+import { Link, Stack, useRouter } from 'expo-router';
+import React, { useState } from 'react';
+import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
-import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
+import * as WebBrowser from 'expo-web-browser';
 
 export default function RegisterScreen() {
   const [email, setEmail] = useState('');
@@ -82,9 +83,7 @@ export default function RegisterScreen() {
         <ScrollView contentContainerStyle={styles.scrollContainer}>
           <View style={styles.mainContent}>
             <View style={styles.header}>
-              <View style={styles.logoContainer}>
-                <Feather name="check" size={40} color="black" />
-              </View>
+              <AppLogo size={86} />
               <Text style={styles.title}>Create an account</Text>
               <Text style={styles.subtitle}>Enter your email to sign up for this app</Text>
             </View>
@@ -181,16 +180,6 @@ const styles = StyleSheet.create({
   header: {
     alignItems: 'center',
     marginBottom: 32,
-  },
-  logoContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    borderWidth: 2,
-    borderColor: 'black',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 24,
   },
   title: {
     fontSize: 24,
