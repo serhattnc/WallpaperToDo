@@ -2,18 +2,18 @@ import AppLogo from '@/components/app-logo';
 import { supabase } from '@/constants/supabase';
 import { AntDesign, Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    Alert,
-    Animated,
-    FlatList,
-    Modal,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  Animated,
+  FlatList,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -27,6 +27,7 @@ type CategoryOption = {
   name: string;
   emoji?: string;
   color: string;
+  date?: string;
 };
 
 type Task = {
@@ -75,6 +76,7 @@ const parseCategory = (value?: string | null): CategoryOption | null => {
         name: parsed.name.trim().toLowerCase(),
         emoji: parsed.emoji?.trim(),
         color: parsed.color,
+        date: parsed.date,
       };
     }
   } catch {
@@ -121,6 +123,7 @@ const serializeSubtasks = (items: SubtaskItem[]) => {
 };
 
 export default function HomeScreen() {
+  const taskListRef = useRef<FlatList<Task>>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [expandedTaskIds, setExpandedTaskIds] = useState<Record<string, boolean>>({});
   const [editingTaskId, setEditingTaskId] = useState<number | string | null>(null);
@@ -362,8 +365,12 @@ export default function HomeScreen() {
   };
 
   const activeCategoryStats = useMemo(() => {
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const dateFilteredTasks = tasks.filter(t => !t.categoryMeta?.date || t.categoryMeta.date === todayStr);
+
     const map = new Map<string, { category: CategoryOption; count: number }>();
-    tasks.forEach((task) => {
+    dateFilteredTasks.forEach((task) => {
       if (!task.categoryMeta) return;
       const existing = map.get(task.categoryMeta.name);
       if (existing) {
@@ -384,8 +391,26 @@ export default function HomeScreen() {
   }, [activeCategoryStats, selectedTaskFilter]);
 
   const filteredTasks = useMemo(() => {
-    if (selectedTaskFilter === 'all') return tasks;
-    return tasks.filter((task) => task.categoryMeta?.name === selectedTaskFilter);
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+
+    let scopedTasks = tasks.filter(t => !t.categoryMeta?.date || t.categoryMeta.date === todayStr);
+
+    if (selectedTaskFilter !== 'all') {
+      scopedTasks = scopedTasks.filter((task) => task.categoryMeta?.name === selectedTaskFilter);
+    }
+
+    // Keep active tasks on top, completed at the bottom, and preserve insert order.
+    return [...scopedTasks].sort((a, b) => {
+      const completionDiff = Number(a.is_completed) - Number(b.is_completed);
+      if (completionDiff !== 0) return completionDiff;
+
+      if (typeof a.id === 'number' && typeof b.id === 'number') {
+        return a.id - b.id;
+      }
+
+      return String(a.id).localeCompare(String(b.id));
+    });
   }, [selectedTaskFilter, tasks]);
 
   const renderItem = ({ item }: { item: Task }) => {
@@ -467,7 +492,7 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <AppLogo size={68} />
+        <AppLogo size={40} />
         <Text style={styles.dateText}>{currentDate}</Text>
       </View>
 
@@ -478,8 +503,10 @@ export default function HomeScreen() {
 
         <ScrollView
           horizontal
+          style={{ maxHeight: 36, marginBottom: 12, flexShrink: 0 }}
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.activeCategoryList}
+          scrollEventThrottle={16}
         >
           <TouchableOpacity
             style={[
@@ -511,33 +538,20 @@ export default function HomeScreen() {
         </ScrollView>
 
         <FlatList
+          ref={taskListRef}
           data={filteredTasks}
           renderItem={renderItem}
           keyExtractor={(item) => item.id.toString()}
+          style={styles.taskList}
+          showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContent}
+          scrollEnabled={true}
           ListEmptyComponent={<Text style={styles.emptyText}>No tasks for today</Text>}
         />
 
         <TouchableOpacity style={styles.addButton} onPress={openCreateTaskModal}>
           <AntDesign name="plus" size={24} color="black" />
         </TouchableOpacity>
-      </View>
-
-      <View style={styles.bottomActions}>
-        <TouchableOpacity style={styles.actionCard}>
-          <AntDesign name="plus" size={20} color="black" style={{ marginBottom: 8 }} />
-          <Text style={styles.actionText}>Add background</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.actionCard}>
-          <Feather name="clipboard" size={20} color="black" style={{ marginBottom: 8 }} />
-          <Text style={styles.actionText}>My backgrounds</Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.banner}>
-        <Feather name="user-plus" size={20} color="black" style={{ marginRight: 10 }} />
-        <Text style={styles.bannerText}>Work with friends</Text>
       </View>
 
       <Modal visible={isTaskModalVisible} animationType="slide" transparent>
@@ -713,13 +727,22 @@ export default function HomeScreen() {
       </Modal>
 
       <View style={styles.bottomNav}>
-        <Feather name="home" size={24} color="black" />
-        <Feather name="calendar" size={24} color="black" />
+        <TouchableOpacity style={styles.tabItem} onPress={() => router.push('/(tabs)/home')}>
+          <Feather name="home" size={24} color="black" />
+          <View style={styles.activeTabDot} />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.tabItem} onPress={() => router.push('/(tabs)/calendar')}>
+          <Feather name="calendar" size={24} color="black" />
+        </TouchableOpacity>
         <View style={styles.navPlusContainer}>
           <AntDesign name="plus" size={24} color="black" />
         </View>
-        <Feather name="clipboard" size={24} color="black" />
-        <Feather name="user" size={24} color="black" />
+        <TouchableOpacity style={styles.tabItem}>
+          <Feather name="clipboard" size={24} color="black" />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.tabItem}>
+          <Feather name="user" size={24} color="black" />
+        </TouchableOpacity>
       </View>
     </SafeAreaView>
   );
@@ -748,18 +771,18 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   cardHeader: {
-    flexDirection: 'row',
     justifyContent: 'flex-start',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 12,
   },
   cardTitle: {
     fontSize: 16,
     fontWeight: 'bold',
   },
   activeCategoryList: {
-    paddingBottom: 20,
+    paddingBottom: 4,
     gap: 8,
+    paddingHorizontal: 16,
   },
   activeCategoryChip: {
     flexDirection: 'row',
@@ -776,7 +799,7 @@ const styles = StyleSheet.create({
   },
   activeCategoryChipSelected: {
     backgroundColor: '#DDE3E8',
-    borderColor: '#AEB8C2',
+    borderColor: '#8F959B',
   },
   activeCategoryText: {
     fontSize: 11,
@@ -785,10 +808,14 @@ const styles = StyleSheet.create({
     textTransform: 'capitalize',
   },
   listContent: {
+    paddingTop: 0,
     paddingBottom: 40,
   },
+  taskList: {
+    flex: 1,
+  },
   taskItem: {
-    backgroundColor: '#E0E0E0',
+    backgroundColor: '#FFFFFF',
     padding: 12,
     borderRadius: 8,
     marginBottom: 8,
@@ -840,7 +867,7 @@ const styles = StyleSheet.create({
   },
   taskDescription: {
     fontSize: 13,
-    color: '#444',
+    color: '#7C7C7C',
     marginTop: 4,
   },
   subtaskList: {
@@ -1110,10 +1137,22 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#eee',
   },
+  tabItem: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 28,
+  },
+  activeTabDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'black',
+    marginTop: 4,
+  },
   navPlusContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
+    width: 30,
+    height: 30,
+    borderRadius: 7,
     borderWidth: 2,
     borderColor: 'black',
     justifyContent: 'center',
