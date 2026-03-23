@@ -8,6 +8,7 @@ import {
   Animated,
   FlatList,
   Modal,
+  PanResponder,
   ScrollView,
   StyleSheet,
   Text,
@@ -146,6 +147,21 @@ export default function HomeScreen() {
 
   const router = useRouter();
 
+  const swipeResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gestureState) =>
+          Math.abs(gestureState.dx) > 14 && Math.abs(gestureState.dy) < 10,
+        onPanResponderRelease: (_, gestureState) => {
+          if (isTaskModalVisible || isCategoryModalVisible) return;
+          if (gestureState.dx < -70 && Math.abs(gestureState.dy) < 40) {
+            router.replace('/(tabs)/calendar');
+          }
+        },
+      }),
+    [isCategoryModalVisible, isTaskModalVisible, router]
+  );
+
   const fetchTasks = useCallback(async () => {
     const {
       data: { session },
@@ -156,7 +172,11 @@ export default function HomeScreen() {
       return;
     }
 
-    const { data, error } = await supabase.from('todos').select('*').order('id', { ascending: true });
+    const { data, error } = await supabase
+      .from('todos')
+      .select('id, task, description, subtask, category, is_completed, user_id')
+      .eq('user_id', session.user.id)
+      .order('id', { ascending: true });
 
     if (error) {
       console.error('Error fetching tasks:', error);
@@ -302,19 +322,26 @@ export default function HomeScreen() {
   };
 
   const toggleTask = async (id: number | string, is_completed: boolean) => {
+    setTasks((prev) => prev.map((task) => (task.id === id ? { ...task, is_completed: !is_completed } : task)));
+
     const { error } = await supabase.from('todos').update({ is_completed: !is_completed }).eq('id', id);
 
     if (error) {
+      setTasks((prev) => prev.map((task) => (task.id === id ? { ...task, is_completed } : task)));
       Alert.alert('Error', error.message);
       return;
     }
-
-    fetchTasks();
   };
 
   const toggleSubtask = async (task: Task, subtaskId: string) => {
     const updated = task.subtasks.map((item) =>
       item.id === subtaskId ? { ...item, is_completed: !item.is_completed } : item
+    );
+
+    setTasks((prev) =>
+      prev.map((item) =>
+        item.id === task.id ? { ...item, subtasks: updated, subtask: serializeSubtasks(updated) } : item
+      )
     );
 
     const { error } = await supabase
@@ -323,22 +350,23 @@ export default function HomeScreen() {
       .eq('id', task.id);
 
     if (error) {
+      setTasks((prev) => prev.map((item) => (item.id === task.id ? task : item)));
       Alert.alert('Error', error.message);
       return;
     }
-
-    fetchTasks();
   };
 
   const deleteTask = async (id: number | string) => {
+    const previousTasks = tasks;
+    setTasks((prev) => prev.filter((item) => item.id !== id));
+
     const { error } = await supabase.from('todos').delete().eq('id', id);
 
     if (error) {
+      setTasks(previousTasks);
       Alert.alert('Error', error.message);
       return;
     }
-
-    fetchTasks();
   };
 
   const addSubtaskInput = () => {
@@ -490,7 +518,7 @@ export default function HomeScreen() {
   });
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} {...swipeResponder.panHandlers}>
       <View style={styles.header}>
         <AppLogo size={40} />
         <Text style={styles.dateText}>{currentDate}</Text>

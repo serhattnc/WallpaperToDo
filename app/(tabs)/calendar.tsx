@@ -4,16 +4,17 @@ import { AntDesign, Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
-  Animated,
-  FlatList,
-  Modal,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    Alert,
+    Animated,
+    FlatList,
+    Modal,
+    PanResponder,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from 'react-native';
 import { Calendar, LocaleConfig } from 'react-native-calendars';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -163,6 +164,21 @@ export default function CalendarScreen() {
 
   const router = useRouter();
 
+  const swipeResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gestureState) =>
+          Math.abs(gestureState.dx) > 14 && Math.abs(gestureState.dy) < 10,
+        onPanResponderRelease: (_, gestureState) => {
+          if (isTaskModalVisible || isCategoryModalVisible) return;
+          if (gestureState.dx > 70 && Math.abs(gestureState.dy) < 40) {
+            router.replace('/(tabs)/home');
+          }
+        },
+      }),
+    [isCategoryModalVisible, isTaskModalVisible, router]
+  );
+
   const fetchTasks = useCallback(async () => {
     const {
       data: { session },
@@ -173,7 +189,11 @@ export default function CalendarScreen() {
       return;
     }
 
-    const { data, error } = await supabase.from('todos').select('*').order('id', { ascending: true });
+    const { data, error } = await supabase
+      .from('todos')
+      .select('id, task, description, subtask, category, is_completed, user_id')
+      .eq('user_id', session.user.id)
+      .order('id', { ascending: true });
 
     if (error) {
       console.error('Error fetching tasks:', error);
@@ -319,19 +339,26 @@ export default function CalendarScreen() {
   };
 
   const toggleTask = async (id: number | string, is_completed: boolean) => {
+    setTasks((prev) => prev.map((task) => (task.id === id ? { ...task, is_completed: !is_completed } : task)));
+
     const { error } = await supabase.from('todos').update({ is_completed: !is_completed }).eq('id', id);
 
     if (error) {
+      setTasks((prev) => prev.map((task) => (task.id === id ? { ...task, is_completed } : task)));
       Alert.alert('Error', error.message);
       return;
     }
-
-    fetchTasks();
   };
 
   const toggleSubtask = async (task: Task, subtaskId: string) => {
     const updated = task.subtasks.map((item) =>
       item.id === subtaskId ? { ...item, is_completed: !item.is_completed } : item
+    );
+
+    setTasks((prev) =>
+      prev.map((item) =>
+        item.id === task.id ? { ...item, subtasks: updated, subtask: serializeSubtasks(updated) } : item
+      )
     );
 
     const { error } = await supabase
@@ -340,22 +367,23 @@ export default function CalendarScreen() {
       .eq('id', task.id);
 
     if (error) {
+      setTasks((prev) => prev.map((item) => (item.id === task.id ? task : item)));
       Alert.alert('Error', error.message);
       return;
     }
-
-    fetchTasks();
   };
 
   const deleteTask = async (id: number | string) => {
+    const previousTasks = tasks;
+    setTasks((prev) => prev.filter((item) => item.id !== id));
+
     const { error } = await supabase.from('todos').delete().eq('id', id);
 
     if (error) {
+      setTasks(previousTasks);
       Alert.alert('Error', error.message);
       return;
     }
-
-    fetchTasks();
   };
 
   const addSubtaskInput = () => {
@@ -531,7 +559,7 @@ export default function CalendarScreen() {
   }, [tasks, todayString]);
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} {...swipeResponder.panHandlers}>
       <View style={styles.header}>
         <AppLogo size={40} />
       </View>
