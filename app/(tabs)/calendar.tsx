@@ -1,4 +1,11 @@
 import AppLogo from '@/components/app-logo';
+import SideSlider from '@/components/side-slider';
+import {
+    loadCustomCategories,
+    mergeCategories,
+    saveCustomCategories,
+    type StoredCategoryOption,
+} from '@/constants/category-storage';
 import { supabase } from '@/constants/supabase';
 import { AntDesign, Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -7,6 +14,7 @@ import {
     Alert,
     Animated,
     FlatList,
+    InteractionManager,
     Modal,
     PanResponder,
     ScrollView,
@@ -36,11 +44,16 @@ type SubtaskItem = {
   is_completed: boolean;
 };
 
+type RecurrenceOption = 'today' | 'daily' | 'weekend' | 'weekday';
+
 type CategoryOption = {
   name: string;
-  emoji?: string;
   color: string;
   date?: string;
+  dueDateTime?: string | null;
+  reminderBeforeMinutes?: number | null;
+  recurrence?: RecurrenceOption;
+  skipDates?: string[];
 };
 
 type Task = {
@@ -68,10 +81,39 @@ const DEFAULT_COLORS = [
 ];
 
 const DEFAULT_CATEGORIES: CategoryOption[] = [
-  { name: 'work', emoji: 'briefcase', color: '#3B82F6' },
-  { name: 'sport', emoji: 'dumbbell', color: '#22C55E' },
-  { name: 'friends', emoji: 'users', color: '#F97316' },
+  { name: 'none', color: '#6B7280' },
+  { name: 'work', color: '#3B82F6' },
+  { name: 'sport', color: '#22C55E' },
+  { name: 'friends', color: '#F97316' },
 ];
+
+const NONE_CATEGORY: CategoryOption = { name: 'none', color: '#6B7280' };
+const NON_DELETABLE_CATEGORY_NAMES = new Set([NONE_CATEGORY.name]);
+const REMINDER_OPTIONS = [
+  { label: '5dk', minutes: 5 },
+  { label: '10dk', minutes: 10 },
+  { label: '30m', minutes: 30 },
+  { label: '1h', minutes: 60 },
+  { label: '3h', minutes: 180 },
+  { label: '6h', minutes: 360 },
+  { label: '12h', minutes: 720 },
+  { label: '1d', minutes: 1440 },
+  { label: '2d', minutes: 2880 },
+];
+
+const RECURRENCE_OPTIONS: { label: string; value: RecurrenceOption }[] = [
+  { label: 'Sadece Bugun', value: 'today' },
+  { label: 'Her Gun', value: 'daily' },
+  { label: 'Hafta Sonu', value: 'weekend' },
+  { label: 'Hafta Ici', value: 'weekday' },
+];
+
+const normalizeRecurrence = (value?: string | null): RecurrenceOption => {
+  if (value === 'daily' || value === 'weekend' || value === 'weekday' || value === 'today') {
+    return value;
+  }
+  return 'today';
+};
 
 const createSubtask = (): SubtaskItem => ({
   id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -87,9 +129,15 @@ const parseCategory = (value?: string | null): CategoryOption | null => {
     if (parsed && parsed.name && parsed.color) {
       return {
         name: parsed.name.trim().toLowerCase(),
-        emoji: parsed.emoji?.trim(),
         color: parsed.color,
         date: parsed.date,
+        dueDateTime: parsed.dueDateTime ?? null,
+        reminderBeforeMinutes:
+          typeof parsed.reminderBeforeMinutes === 'number' ? parsed.reminderBeforeMinutes : null,
+        recurrence: normalizeRecurrence(parsed.recurrence),
+        skipDates: Array.isArray(parsed.skipDates)
+          ? parsed.skipDates.filter((item): item is string => typeof item === 'string')
+          : [],
       };
     }
   } catch {
@@ -135,6 +183,69 @@ const serializeSubtasks = (items: SubtaskItem[]) => {
   return normalized.length ? JSON.stringify(normalized) : null;
 };
 
+const formatModalDateLabel = (date: string) => {
+  const [year, month, day] = date.split('-').map(Number);
+  const dateObj = new Date(year, month - 1, day);
+  return dateObj.toLocaleDateString('tr-TR', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+};
+
+const formatDateKey = (date: Date) => {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+};
+
+const isTaskVisibleOnDate = (task: Task, targetDate: string, todayDate: string) => {
+  const categoryMeta = task.categoryMeta;
+  const taskDate = categoryMeta?.date;
+  if (!taskDate) {
+    // Backward compatibility: old undated tasks are shown only today.
+    return targetDate === todayDate;
+  }
+
+  if (targetDate < taskDate) return false;
+
+  const skipDates = categoryMeta?.skipDates || [];
+  if (skipDates.includes(targetDate)) return false;
+
+  const recurrence = normalizeRecurrence(categoryMeta?.recurrence);
+  if (recurrence === 'today') {
+    return targetDate === taskDate;
+  }
+
+  if (recurrence === 'daily') {
+    return true;
+  }
+
+  const dayOfWeek = new Date(`${targetDate}T00:00:00`).getDay();
+  if (recurrence === 'weekend') {
+    return dayOfWeek === 0 || dayOfWeek === 6;
+  }
+
+  return dayOfWeek >= 1 && dayOfWeek <= 5;
+};
+
+const parseTimeFromDueDateTime = (value?: string | null) => {
+  if (!value) {
+    return { hour: '09', minute: '00' };
+  }
+
+  const match = value.match(/T(\d{2}):(\d{2})/);
+  if (!match) {
+    return { hour: '09', minute: '00' };
+  }
+
+  return { hour: match[1], minute: match[2] };
+};
+
+const formatTimeFromDueDateTime = (value?: string | null) => {
+  if (!value) return null;
+  const parsed = parseTimeFromDueDateTime(value);
+  return `${parsed.hour}:${parsed.minute}`;
+};
+
 export default function CalendarScreen() {
   const [selectedDate, setSelectedDate] = useState(() => {
     const d = new Date();
@@ -153,14 +264,32 @@ export default function CalendarScreen() {
   const titleErrorAnim = useMemo(() => new Animated.Value(0), []);
 
   const [categories, setCategories] = useState<CategoryOption[]>(DEFAULT_CATEGORIES);
+  const [customCategories, setCustomCategories] = useState<CategoryOption[]>([]);
   const [selectedCategory, setSelectedCategory] = useState(DEFAULT_CATEGORIES[0]);
 
   const [newCategoryName, setNewCategoryName] = useState('');
-  const [newCategoryEmoji, setNewCategoryEmoji] = useState('');
   const [newCategoryColor, setNewCategoryColor] = useState(DEFAULT_COLORS[0]);
 
   const [isTaskModalVisible, setIsTaskModalVisible] = useState(false);
   const [isCategoryModalVisible, setIsCategoryModalVisible] = useState(false);
+  const [isTaskDateModalVisible, setIsTaskDateModalVisible] = useState(false);
+  const [isSideMenuVisible, setIsSideMenuVisible] = useState(false);
+  const [taskModalDate, setTaskModalDate] = useState(selectedDate);
+  const [selectedTaskHour, setSelectedTaskHour] = useState('09');
+  const [selectedTaskMinute, setSelectedTaskMinute] = useState('00');
+  const [isTaskTimeEnabled, setIsTaskTimeEnabled] = useState(false);
+  const [isReminderEnabled, setIsReminderEnabled] = useState(false);
+  const [reminderBeforeMinutes, setReminderBeforeMinutes] = useState(60);
+  const [selectedRecurrence, setSelectedRecurrence] = useState<RecurrenceOption>('today');
+  const [editingSkipDates, setEditingSkipDates] = useState<string[]>([]);
+  const [longPressedCategoryName, setLongPressedCategoryName] = useState<string | null>(null);
+  const longPressScaleAnim = useMemo(() => new Animated.Value(1), []);
+  const hourPanStartRef = useRef(0);
+  const hourPanStepRef = useRef(0);
+  const minutePanStartRef = useRef(0);
+  const minutePanStepRef = useRef(0);
+  const hourValueRef = useRef(9);
+  const minuteValueRef = useRef(0);
 
   const router = useRouter();
 
@@ -172,12 +301,93 @@ export default function CalendarScreen() {
         onPanResponderRelease: (_, gestureState) => {
           if (isTaskModalVisible || isCategoryModalVisible) return;
           if (gestureState.dx > 70 && Math.abs(gestureState.dy) < 40) {
-            router.replace('/(tabs)/home');
+            router.navigate('/(tabs)/home');
           }
         },
       }),
     [isCategoryModalVisible, isTaskModalVisible, router]
   );
+
+  const hourPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dy) > 4,
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderGrant: () => {
+          hourPanStartRef.current = hourValueRef.current;
+          hourPanStepRef.current = 0;
+        },
+        onPanResponderMove: (_, gestureState) => {
+          const nextStep = Math.round(-gestureState.dy / 22);
+          if (nextStep === hourPanStepRef.current) return;
+
+          hourPanStepRef.current = nextStep;
+          const nextHour = ((hourPanStartRef.current + nextStep) % 24 + 24) % 24;
+          setSelectedTaskHour(String(nextHour).padStart(2, '0'));
+        },
+      }),
+    []
+  );
+
+  const minutePanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dy) > 4,
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderGrant: () => {
+          minutePanStartRef.current = minuteValueRef.current;
+          minutePanStepRef.current = 0;
+        },
+        onPanResponderMove: (_, gestureState) => {
+          const nextStep = Math.round(-gestureState.dy / 10);
+          if (nextStep === minutePanStepRef.current) return;
+
+          minutePanStepRef.current = nextStep;
+          const rawMinute = minutePanStartRef.current + nextStep;
+          const nextMinute = ((rawMinute % 60) + 60) % 60;
+          setSelectedTaskMinute(String(nextMinute).padStart(2, '0'));
+        },
+      }),
+    []
+  );
+
+  useEffect(() => {
+    hourValueRef.current = Number(selectedTaskHour);
+  }, [selectedTaskHour]);
+
+  useEffect(() => {
+    minuteValueRef.current = Number(selectedTaskMinute);
+  }, [selectedTaskMinute]);
+
+  useEffect(() => {
+    let alive = true;
+
+    const bootstrapCustomCategories = async () => {
+      const stored = (await loadCustomCategories()) as CategoryOption[];
+      const initialCategories = mergeCategories(
+        [NONE_CATEGORY],
+        stored.length > 0 ? stored : DEFAULT_CATEGORIES
+      ) as CategoryOption[];
+      if (!alive) return;
+
+      const merged = mergeCategories(initialCategories as StoredCategoryOption[]);
+      setCustomCategories(initialCategories);
+      setCategories(merged as CategoryOption[]);
+      setSelectedCategory((prev) => merged.find((item) => item.name === prev.name) || (merged[0] as CategoryOption));
+
+      if (stored.length === 0) {
+        await saveCustomCategories(initialCategories as StoredCategoryOption[]);
+      }
+    };
+
+    bootstrapCustomCategories();
+
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const fetchTasks = useCallback(async () => {
     const {
@@ -215,29 +425,45 @@ export default function CalendarScreen() {
       .map((item) => item.categoryMeta)
       .filter((item): item is CategoryOption => Boolean(item));
 
-    const categoryMap = new Map<string, CategoryOption>();
-    [...DEFAULT_CATEGORIES, ...dynamicCategories].forEach((item) => {
-      categoryMap.set(item.name, item);
-    });
+    const mergedCategories = mergeCategories(
+      [NONE_CATEGORY],
+      customCategories as StoredCategoryOption[],
+      dynamicCategories as StoredCategoryOption[]
+    ) as CategoryOption[];
 
-    const mergedCategories = Array.from(categoryMap.values());
     setCategories(mergedCategories);
 
     setSelectedCategory((prev) => {
       const exists = mergedCategories.find((item) => item.name === prev.name);
       return exists || mergedCategories[0];
     });
-  }, [router]);
+  }, [customCategories, router]);
 
   useEffect(() => {
-    fetchTasks();
+    const interactionHandle = InteractionManager.runAfterInteractions(() => {
+      fetchTasks();
+    });
+
+    return () => {
+      interactionHandle.cancel();
+    };
   }, [fetchTasks]);
 
   const resetTaskModalFields = () => {
+    const now = new Date();
     setNewTask('');
     setNewDescription('');
     setNewSubtasks([createSubtask()]);
     setEditingTaskId(null);
+    setTaskModalDate(selectedDate);
+    setSelectedTaskHour(String(now.getHours()).padStart(2, '0'));
+    setSelectedTaskMinute(String(now.getMinutes()).padStart(2, '0'));
+    setIsTaskTimeEnabled(false);
+    setIsReminderEnabled(false);
+    setReminderBeforeMinutes(60);
+    setSelectedRecurrence('today');
+    setEditingSkipDates([]);
+    setSelectedCategory((prev) => categories.find((item) => item.name === NONE_CATEGORY.name) || prev);
     setTitleError('');
     titleErrorAnim.setValue(0);
   };
@@ -259,6 +485,22 @@ export default function CalendarScreen() {
         setCategories((prev) => [...prev, task.categoryMeta as CategoryOption]);
       }
       setSelectedCategory(task.categoryMeta);
+      setTaskModalDate(task.categoryMeta.date || selectedDate);
+      const parsedTime = parseTimeFromDueDateTime(task.categoryMeta.dueDateTime);
+      setSelectedTaskHour(parsedTime.hour);
+      setSelectedTaskMinute(parsedTime.minute);
+      setIsTaskTimeEnabled(Boolean(task.categoryMeta.dueDateTime));
+      setSelectedRecurrence(normalizeRecurrence(task.categoryMeta.recurrence));
+      setEditingSkipDates(task.categoryMeta.skipDates || []);
+
+      const hasReminder = typeof task.categoryMeta.reminderBeforeMinutes === 'number';
+      setIsReminderEnabled(hasReminder);
+      if (hasReminder) {
+        setReminderBeforeMinutes(task.categoryMeta.reminderBeforeMinutes as number);
+      }
+    } else {
+      setSelectedRecurrence('today');
+      setEditingSkipDates([]);
     }
 
     setIsTaskModalVisible(true);
@@ -288,7 +530,15 @@ export default function CalendarScreen() {
       task: newTask.trim(),
       description: newDescription.trim() || null,
       subtask: serializeSubtasks(newSubtasks),
-      category: JSON.stringify({ ...selectedCategory, date: selectedDate }),
+      category: JSON.stringify({
+        name: selectedCategory.name,
+        color: selectedCategory.color,
+        date: taskModalDate,
+        dueDateTime: isTaskTimeEnabled ? `${taskModalDate}T${selectedTaskHour}:${selectedTaskMinute}` : null,
+        reminderBeforeMinutes: isTaskTimeEnabled && isReminderEnabled ? reminderBeforeMinutes : null,
+        recurrence: selectedRecurrence,
+        skipDates: editingSkipDates,
+      }),
       user_id: user.id,
     };
 
@@ -308,7 +558,7 @@ export default function CalendarScreen() {
     fetchTasks();
   };
 
-  const addCategory = () => {
+  const addCategory = async () => {
     const normalizedName = newCategoryName.trim().toLowerCase();
     if (!normalizedName) return;
 
@@ -316,7 +566,6 @@ export default function CalendarScreen() {
     if (existing) {
       setSelectedCategory(existing);
       setNewCategoryName('');
-      setNewCategoryEmoji('');
       setNewCategoryColor(DEFAULT_COLORS[0]);
       setIsCategoryModalVisible(false);
       return;
@@ -324,18 +573,131 @@ export default function CalendarScreen() {
 
     const createdCategory: CategoryOption = {
       name: normalizedName,
-      emoji: newCategoryEmoji.trim() || undefined,
       color: newCategoryColor,
     };
 
-    const updated = [...categories, createdCategory];
-    setCategories(updated);
+    const updatedCustom = mergeCategories(
+      customCategories as StoredCategoryOption[],
+      [createdCategory] as StoredCategoryOption[]
+    ) as CategoryOption[];
+
+    setCustomCategories(updatedCustom);
+    await saveCustomCategories(updatedCustom as StoredCategoryOption[]);
+    setCategories((prev) => mergeCategories(prev as StoredCategoryOption[], [createdCategory] as StoredCategoryOption[]) as CategoryOption[]);
     setSelectedCategory(createdCategory);
 
     setNewCategoryName('');
-    setNewCategoryEmoji('');
     setNewCategoryColor(DEFAULT_COLORS[0]);
     setIsCategoryModalVisible(false);
+  };
+
+  const animateCategoryGrow = (categoryName: string) => {
+    setLongPressedCategoryName(categoryName);
+    longPressScaleAnim.setValue(1);
+    Animated.spring(longPressScaleAnim, {
+      toValue: 1.08,
+      friction: 5,
+      tension: 170,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const animateCategoryReset = () => {
+    Animated.spring(longPressScaleAnim, {
+      toValue: 1,
+      friction: 6,
+      tension: 170,
+      useNativeDriver: true,
+    }).start(() => {
+      setLongPressedCategoryName(null);
+    });
+  };
+
+  const deleteCategory = async (categoryToDelete: CategoryOption) => {
+    if (NON_DELETABLE_CATEGORY_NAMES.has(categoryToDelete.name)) {
+      Alert.alert('Info', 'This category cannot be deleted.');
+      return;
+    }
+
+    if (categories.length <= 1) {
+      Alert.alert('Info', 'At least one category should remain.');
+      return;
+    }
+
+    const impactedTasks = tasks.filter((task) => task.categoryMeta?.name === categoryToDelete.name);
+    if (impactedTasks.length > 0) {
+      setTasks((prev) =>
+        prev.map((task) =>
+          task.categoryMeta?.name === categoryToDelete.name
+            ? { ...task, category: null, categoryMeta: null }
+            : task
+        )
+      );
+
+      const results = await Promise.all(
+        impactedTasks.map((task) => supabase.from('todos').update({ category: null }).eq('id', task.id))
+      );
+
+      if (results.some((result) => result.error)) {
+        Alert.alert('Error', 'Category could not be removed from some tasks.');
+        fetchTasks();
+        return;
+      }
+    }
+
+    const updatedCustom = customCategories.filter((item) => item.name !== categoryToDelete.name);
+    const dynamicCategories = tasks
+      .map((item) => item.categoryMeta)
+      .filter((item): item is CategoryOption => item !== null)
+      .filter((item) => item.name !== categoryToDelete.name);
+
+    const merged = mergeCategories(
+      [NONE_CATEGORY],
+      updatedCustom as StoredCategoryOption[],
+      dynamicCategories as StoredCategoryOption[]
+    ) as CategoryOption[];
+
+    setCustomCategories(updatedCustom);
+    await saveCustomCategories(updatedCustom as StoredCategoryOption[]);
+    setCategories(merged);
+
+    setSelectedCategory((prev) => {
+      if (prev.name === categoryToDelete.name) {
+        return merged[0] || prev;
+      }
+      return prev;
+    });
+
+    if (selectedTaskFilter === categoryToDelete.name) {
+      setSelectedTaskFilter('all');
+    }
+  };
+
+  const confirmDeleteCategory = (category: CategoryOption) => {
+    animateCategoryGrow(category.name);
+    Alert.alert(
+      'Delete category',
+      `Delete "${category.name}" category?`,
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+          onPress: animateCategoryReset,
+        },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            await deleteCategory(category);
+            animateCategoryReset();
+          },
+        },
+      ],
+      {
+        cancelable: true,
+        onDismiss: animateCategoryReset,
+      }
+    );
   };
 
   const toggleTask = async (id: number | string, is_completed: boolean) => {
@@ -386,6 +748,83 @@ export default function CalendarScreen() {
     }
   };
 
+  const skipRecurringTaskOnDate = async (task: Task, dateKey: string) => {
+    if (!task.categoryMeta) return;
+
+    const updatedMeta: CategoryOption = {
+      ...task.categoryMeta,
+      skipDates: Array.from(new Set([...(task.categoryMeta.skipDates || []), dateKey])),
+    };
+
+    setTasks((prev) =>
+      prev.map((item) =>
+        item.id === task.id
+          ? {
+              ...item,
+              categoryMeta: updatedMeta,
+              category: JSON.stringify(updatedMeta),
+            }
+          : item
+      )
+    );
+
+    const { error } = await supabase
+      .from('todos')
+      .update({ category: JSON.stringify(updatedMeta) })
+      .eq('id', task.id);
+
+    if (error) {
+      Alert.alert('Error', error.message);
+      fetchTasks();
+    }
+  };
+
+  const confirmDeleteTask = (task: Task) => {
+    const todayKey = formatDateKey(new Date());
+    const recurrence = normalizeRecurrence(task.categoryMeta?.recurrence);
+
+    if (recurrence !== 'today' && isTaskVisibleOnDate(task, selectedDate, todayKey)) {
+      Alert.alert(
+        'Tekrarlayan gorev',
+        'Sadece bugunku gorev silinsin mi, yoksa tum tekrarlar mi silinsin?',
+        [
+          {
+            text: 'Vazgec',
+            style: 'cancel',
+          },
+          {
+            text: 'Sadece Bugun',
+            onPress: () => skipRecurringTaskOnDate(task, selectedDate),
+          },
+          {
+            text: 'Tumunu Sil',
+            style: 'destructive',
+            onPress: () => deleteTask(task.id),
+          },
+        ],
+        { cancelable: true }
+      );
+      return;
+    }
+
+    Alert.alert(
+      'Delete task',
+      `"${task.task}" silinsin mi?`,
+      [
+        {
+          text: 'Vazgec',
+          style: 'cancel',
+        },
+        {
+          text: 'Sil',
+          style: 'destructive',
+          onPress: () => deleteTask(task.id),
+        },
+      ],
+      { cancelable: true }
+    );
+  };
+
   const addSubtaskInput = () => {
     setNewSubtasks((prev) => [...prev, createSubtask()]);
   };
@@ -416,11 +855,7 @@ export default function CalendarScreen() {
 
   const activeCategoryStats = useMemo(() => {
     const map = new Map<string, { category: CategoryOption; count: number }>();
-    const dateFilteredTasks = tasks.filter((task) => {
-      const taskDate = task.categoryMeta?.date;
-      if (!taskDate) return selectedDate === todayString;
-      return taskDate === selectedDate;
-    });
+    const dateFilteredTasks = tasks.filter((task) => isTaskVisibleOnDate(task, selectedDate, todayString));
     dateFilteredTasks.forEach((task) => {
       if (!task.categoryMeta) return;
       const existing = map.get(task.categoryMeta.name);
@@ -442,14 +877,7 @@ export default function CalendarScreen() {
   }, [activeCategoryStats, selectedTaskFilter]);
 
   const dateScopedTasks = useMemo(() => {
-    return tasks.filter((task) => {
-      const taskDate = task.categoryMeta?.date;
-      if (!taskDate) {
-        // Backward compatibility: old tasks without a date belong to today only.
-        return selectedDate === todayString;
-      }
-      return taskDate === selectedDate;
-    });
+    return tasks.filter((task) => isTaskVisibleOnDate(task, selectedDate, todayString));
   }, [selectedDate, tasks, todayString]);
 
   const filteredTasks = useMemo(() => {
@@ -474,6 +902,7 @@ export default function CalendarScreen() {
 
   const renderItem = ({ item }: { item: Task }) => {
     const expanded = Boolean(expandedTaskIds[String(item.id)]);
+    const taskTime = formatTimeFromDueDateTime(item.categoryMeta?.dueDateTime);
 
     return (
     <View style={styles.taskItem}>
@@ -503,18 +932,24 @@ export default function CalendarScreen() {
         </View>
       </TouchableOpacity>
 
-      <TouchableOpacity onPress={() => deleteTask(item.id)}>
+      <TouchableOpacity onPress={() => confirmDeleteTask(item)}>
         <Feather name="x" size={20} color="#999" />
       </TouchableOpacity>
       </View>
 
       {expanded && (
         <View style={styles.taskExpandedArea}>
-          {!!item.categoryMeta && (
+          {taskTime ? (
+            <View style={styles.taskTimeBadge}>
+              <Feather name="clock" size={12} color="#4B5563" />
+              <Text style={[styles.taskTimeText, item.is_completed && styles.taskCompleted]}>{taskTime}</Text>
+            </View>
+          ) : null}
+
+          {!!item.categoryMeta && item.categoryMeta.name !== NONE_CATEGORY.name && (
             <View style={styles.categoryBadge}>
               <View style={[styles.categoryColorDot, { backgroundColor: item.categoryMeta.color }]} />
               <Text style={styles.categoryBadgeText}>
-                {item.categoryMeta.emoji ? `${item.categoryMeta.emoji} ` : ''}
                 {item.categoryMeta.name}
               </Text>
             </View>
@@ -542,25 +977,17 @@ export default function CalendarScreen() {
     );
   };
 
-  const taskDateSet = useMemo(() => {
-    const dates = new Set<string>();
-
-    tasks.forEach((task) => {
-      const taskDate = task.categoryMeta?.date;
-      if (taskDate) {
-        dates.add(taskDate);
-      } else {
-        // Keep legacy undated tasks on today.
-        dates.add(todayString);
-      }
-    });
-
-    return dates;
-  }, [tasks, todayString]);
+  const hasTaskOnDate = useCallback(
+    (dateString: string) => tasks.some((task) => isTaskVisibleOnDate(task, dateString, todayString)),
+    [tasks, todayString]
+  );
 
   return (
     <SafeAreaView style={styles.container} {...swipeResponder.panHandlers}>
       <View style={styles.header}>
+        <TouchableOpacity style={styles.headerMenuButton} onPress={() => setIsSideMenuVisible(true)}>
+          <Feather name="menu" size={22} color="#111827" />
+        </TouchableOpacity>
         <AppLogo size={40} />
       </View>
 
@@ -573,7 +1000,7 @@ export default function CalendarScreen() {
 
             const isToday = date.dateString === todayString;
             const isSelected = date.dateString === selectedDate;
-            const hasTask = taskDateSet.has(date.dateString);
+            const hasTask = hasTaskOnDate(date.dateString);
 
             return (
               <TouchableOpacity
@@ -662,7 +1089,6 @@ export default function CalendarScreen() {
             >
               <View style={[styles.categoryColorDot, { backgroundColor: category.color }]} />
               <Text style={styles.activeCategoryText}>
-                {category.emoji ? `${category.emoji} ` : ''}
                 {category.name} ({count})
               </Text>
             </TouchableOpacity>
@@ -769,21 +1195,35 @@ export default function CalendarScreen() {
               >
                 {categories.map((category) => {
                   const isSelected = selectedCategory.name === category.name;
+                  const isNonDeletable = NON_DELETABLE_CATEGORY_NAMES.has(category.name);
+                  const isLongPressed = longPressedCategoryName === category.name;
+
                   return (
-                    <TouchableOpacity
+                    <Animated.View
                       key={category.name}
                       style={[
-                        styles.categoryOption,
-                        isSelected && styles.categoryOptionSelected,
+                        isLongPressed && {
+                          transform: [{ scale: longPressScaleAnim }],
+                        },
                       ]}
-                      onPress={() => setSelectedCategory(category)}
                     >
-                      <View style={[styles.categoryColorDot, { backgroundColor: category.color }]} />
-                      <Text style={styles.categoryOptionText}>
-                        {category.emoji ? `${category.emoji} ` : ''}
-                        {category.name}
-                      </Text>
-                    </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[
+                          styles.categoryOption,
+                          isSelected && styles.categoryOptionSelected,
+                        ]}
+                        onPress={() => setSelectedCategory(category)}
+                        onLongPress={() => confirmDeleteCategory(category)}
+                        delayLongPress={280}
+                        activeOpacity={0.85}
+                      >
+                        <View style={[styles.categoryColorDot, { backgroundColor: category.color }]} />
+                        <Text style={styles.categoryOptionText}>
+                          {category.name}
+                        </Text>
+                        {!isNonDeletable && <Feather name="trash-2" size={11} color="#6B7280" />}
+                      </TouchableOpacity>
+                    </Animated.View>
                   );
                 })}
               </ScrollView>
@@ -794,6 +1234,43 @@ export default function CalendarScreen() {
               >
                 <AntDesign name="plus" size={18} color="black" />
               </TouchableOpacity>
+            </View>
+
+            <View style={styles.modalDateRow}>
+              <Text style={styles.categoryTitle}>Tarih</Text>
+              <TouchableOpacity style={styles.modalDateButton} onPress={() => setIsTaskDateModalVisible(true)}>
+                <Feather name="calendar" size={16} color="#111827" />
+                <Text style={styles.modalDateButtonText}>{formatModalDateLabel(taskModalDate)}</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.recurrenceRow}>
+              <Text style={styles.categoryTitle}>Gorev Tekrari</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.recurrenceOptionsRow}
+              >
+                {RECURRENCE_OPTIONS.map((option) => {
+                  const selected = selectedRecurrence === option.value;
+                  return (
+                    <TouchableOpacity
+                      key={option.value}
+                      style={[styles.recurrenceOption, selected && styles.recurrenceOptionSelected]}
+                      onPress={() => setSelectedRecurrence(option.value)}
+                    >
+                      <Text
+                        style={[
+                          styles.recurrenceOptionText,
+                          selected && styles.recurrenceOptionTextSelected,
+                        ]}
+                      >
+                        {option.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
             </View>
 
             <View style={styles.modalButtons}>
@@ -814,6 +1291,134 @@ export default function CalendarScreen() {
         </View>
       </Modal>
 
+      <Modal visible={isTaskDateModalVisible} animationType="slide" transparent>
+        <View style={styles.modalContainer}>
+          <View style={[styles.modalContent, styles.datePickerModalContent]}>
+            <Text style={styles.modalTitle}>Tarih, Saat ve Hatirlatma</Text>
+
+            <Calendar
+              current={taskModalDate}
+              onDayPress={(day: { dateString: string }) => setTaskModalDate(day.dateString)}
+              markedDates={{
+                [taskModalDate]: {
+                  selected: true,
+                  selectedColor: '#111',
+                },
+              }}
+              theme={{
+                backgroundColor: '#fff',
+                calendarBackground: '#fff',
+                textSectionTitleColor: '#9CA3AF',
+                dayTextColor: '#111827',
+                todayTextColor: '#111827',
+                selectedDayTextColor: '#fff',
+                arrowColor: '#111827',
+                monthTextColor: '#111827',
+                textMonthFontWeight: '700',
+                textDayFontWeight: '400',
+              }}
+              style={styles.datePickerCalendar}
+            />
+
+            <View style={styles.timePickerWrap}>
+              <TouchableOpacity
+                style={[
+                  styles.timeMainButton,
+                  isTaskTimeEnabled && styles.timeMainButtonActive,
+                ]}
+                onPress={() => {
+                  setIsTaskTimeEnabled((prev) => {
+                    const next = !prev;
+                    if (!next) {
+                      setIsReminderEnabled(false);
+                    }
+                    return next;
+                  });
+                }}
+              >
+                <Feather name="clock" size={16} color={isTaskTimeEnabled ? '#111827' : '#6B7280'} />
+                <Text style={styles.timeMainButtonText}>
+                  {isTaskTimeEnabled ? `Saat Secildi (${selectedTaskHour}:${selectedTaskMinute})` : 'Saat Ekleme (Istege Bagli)'}
+                </Text>
+              </TouchableOpacity>
+
+              {isTaskTimeEnabled && (
+                <View style={styles.timeWheelRow}>
+                  <View style={styles.timeWheelCard} {...hourPanResponder.panHandlers}>
+                    <Feather name="chevron-up" size={20} color="#6B7280" />
+                    <Text style={styles.timeWheelValue}>{selectedTaskHour}</Text>
+                    <Feather name="chevron-down" size={20} color="#6B7280" />
+                  </View>
+
+                  <Text style={styles.timeBigSeparator}>:</Text>
+
+                  <View style={styles.timeWheelCard} {...minutePanResponder.panHandlers}>
+                    <Feather name="chevron-up" size={20} color="#6B7280" />
+                    <Text style={styles.timeWheelValue}>{selectedTaskMinute}</Text>
+                    <Feather name="chevron-down" size={20} color="#6B7280" />
+                  </View>
+                </View>
+              )}
+            </View>
+
+            {isTaskTimeEnabled && (
+              <TouchableOpacity
+                style={[
+                  styles.reminderMainButton,
+                  isReminderEnabled && styles.reminderMainButtonActive,
+                ]}
+                onPress={() => setIsReminderEnabled((prev) => !prev)}
+              >
+                <Feather name="bell" size={16} color={isReminderEnabled ? '#111827' : '#6B7280'} />
+                <Text style={styles.reminderMainButtonText}>
+                  {isReminderEnabled ? 'Hatirlatma Acik' : 'Hatirlatma Kapali'}
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            {isTaskTimeEnabled && isReminderEnabled && (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.reminderOptionRow}
+              >
+                {REMINDER_OPTIONS.map((option) => {
+                  const selected = reminderBeforeMinutes === option.minutes;
+                  return (
+                    <TouchableOpacity
+                      key={option.minutes}
+                      style={[
+                        styles.reminderOption,
+                        selected && styles.reminderOptionSelected,
+                      ]}
+                      onPress={() => setReminderBeforeMinutes(option.minutes)}
+                    >
+                      <Text
+                        style={[
+                          styles.reminderOptionText,
+                          selected && styles.reminderOptionTextSelected,
+                        ]}
+                      >
+                        {option.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            )}
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity style={styles.modalButtonCancel} onPress={() => setIsTaskDateModalVisible(false)}>
+                <Text style={styles.modalButtonText}>Kapat</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.modalButtonAdd} onPress={() => setIsTaskDateModalVisible(false)}>
+                <Text style={[styles.modalButtonText, { color: 'white' }]}>Kaydet</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={isCategoryModalVisible} animationType="fade" transparent>
         <View style={styles.modalContainer}>
           <View style={styles.modalContent}>
@@ -825,13 +1430,6 @@ export default function CalendarScreen() {
               onChangeText={setNewCategoryName}
               autoCapitalize="none"
             />
-            <TextInput
-              style={styles.input}
-              placeholder="Emoji"
-              value={newCategoryEmoji}
-              onChangeText={setNewCategoryEmoji}
-            />
-
             <Text style={styles.categoryTitle}>Color</Text>
             <View style={styles.colorGrid}>
               {DEFAULT_COLORS.map((color) => {
@@ -859,10 +1457,10 @@ export default function CalendarScreen() {
       </Modal>
 
       <View style={styles.bottomNav}>
-        <TouchableOpacity style={styles.tabItem} onPress={() => router.push('/(tabs)/home')}>
+        <TouchableOpacity style={styles.tabItem} onPress={() => router.navigate('/(tabs)/home')}>
           <Feather name="home" size={24} color="black" />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.tabItem} onPress={() => router.push('/(tabs)/calendar')}>
+        <TouchableOpacity style={styles.tabItem} onPress={() => router.navigate('/(tabs)/calendar')}>
           <Feather name="calendar" size={24} color="black" />
           <View style={styles.activeTabDot} />
         </TouchableOpacity>
@@ -872,10 +1470,16 @@ export default function CalendarScreen() {
         <TouchableOpacity style={styles.tabItem}>
           <Feather name="clipboard" size={24} color="black" />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.tabItem}>
+        <TouchableOpacity style={styles.tabItem} onPress={() => router.navigate('/(tabs)/profile')}>
           <Feather name="user" size={24} color="black" />
         </TouchableOpacity>
       </View>
+
+      <SideSlider
+        visible={isSideMenuVisible}
+        onClose={() => setIsSideMenuVisible(false)}
+        currentRoute="calendar"
+      />
     </SafeAreaView>
   );
 }
@@ -889,6 +1493,20 @@ const styles = StyleSheet.create({
   header: {
     alignItems: 'center',
     marginBottom: 20,
+    position: 'relative',
+  },
+  headerMenuButton: {
+    position: 'absolute',
+    left: 0,
+    top: 6,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 0,
+    backgroundColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 2,
   },
   dateText: {
     color: '#666',
@@ -1002,6 +1620,12 @@ const styles = StyleSheet.create({
     color: '#7C7C7C',
     marginTop: 4,
   },
+  taskTimeText: {
+    fontSize: 12,
+    color: '#4B5563',
+    marginLeft: 6,
+    fontWeight: '600',
+  },
   subtaskList: {
     marginTop: 8,
   },
@@ -1034,6 +1658,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#D1D5DB',
     backgroundColor: '#fff',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  taskTimeBadge: {
+    alignSelf: 'flex-start',
+    marginTop: 2,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    backgroundColor: '#FFFFFF',
     flexDirection: 'row',
     alignItems: 'center',
   },
@@ -1227,6 +1863,157 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#fff',
+  },
+  modalDateRow: {
+    marginBottom: 12,
+  },
+  recurrenceRow: {
+    marginBottom: 12,
+  },
+  recurrenceOptionsRow: {
+    marginTop: 8,
+    paddingBottom: 2,
+    gap: 8,
+  },
+  recurrenceOption: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    backgroundColor: '#F3F4F6',
+  },
+  recurrenceOptionSelected: {
+    borderColor: '#111827',
+    backgroundColor: '#111827',
+  },
+  recurrenceOptionText: {
+    color: '#111827',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  recurrenceOptionTextSelected: {
+    color: '#FFFFFF',
+  },
+  modalDateButton: {
+    minHeight: 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    backgroundColor: '#F9FAFB',
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  modalDateButtonText: {
+    marginLeft: 8,
+    fontSize: 13,
+    color: '#111827',
+    fontWeight: '600',
+  },
+  datePickerModalContent: {
+    maxHeight: '80%',
+  },
+  datePickerCalendar: {
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  timePickerWrap: {
+    marginBottom: 12,
+  },
+  timeMainButton: {
+    minHeight: 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    backgroundColor: '#F9FAFB',
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  timeMainButtonActive: {
+    borderColor: '#9CA3AF',
+    backgroundColor: '#EEF2F7',
+  },
+  timeMainButtonText: {
+    marginLeft: 8,
+    color: '#111827',
+    fontWeight: '600',
+    fontSize: 13,
+  },
+  timeWheelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  timeWheelCard: {
+    width: 132,
+    borderRadius: 14,
+    borderWidth: 0,
+    paddingVertical: 14,
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  timeWheelValue: {
+    fontSize: 34,
+    fontWeight: '700',
+    color: '#111827',
+    lineHeight: 40,
+  },
+  timeBigSeparator: {
+    fontSize: 36,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 8,
+  },
+  reminderMainButton: {
+    minHeight: 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    backgroundColor: '#F9FAFB',
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  reminderMainButtonActive: {
+    borderColor: '#9CA3AF',
+    backgroundColor: '#EEF2F7',
+  },
+  reminderMainButtonText: {
+    marginLeft: 8,
+    color: '#111827',
+    fontWeight: '600',
+    fontSize: 13,
+  },
+  reminderOptionRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 8,
+    paddingRight: 8,
+  },
+  reminderOption: {
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: '#fff',
+  },
+  reminderOptionSelected: {
+    borderColor: '#111827',
+    backgroundColor: '#E5E7EB',
+  },
+  reminderOptionText: {
+    fontSize: 12,
+    color: '#374151',
+    fontWeight: '600',
+  },
+  reminderOptionTextSelected: {
+    color: '#111827',
   },
   colorGrid: {
     flexDirection: 'row',

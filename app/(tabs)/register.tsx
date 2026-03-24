@@ -10,6 +10,7 @@ import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 
 export default function RegisterScreen() {
+  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -48,10 +49,22 @@ export default function RegisterScreen() {
       return;
     }
 
+    const trimmedUsername = username.trim();
+    if (!trimmedUsername) {
+      Alert.alert('Error', 'Username is required');
+      return;
+    }
+
     setLoading(true);
     const { error } = await supabase.auth.signUp({
       email,
       password,
+      options: {
+        data: {
+          username: trimmedUsername,
+          full_name: trimmedUsername,
+        },
+      },
     });
 
     if (error) {
@@ -89,6 +102,14 @@ export default function RegisterScreen() {
             </View>
 
             <View style={styles.form}>
+              <TextInput
+                style={styles.input}
+                placeholder="username"
+                placeholderTextColor="#999"
+                value={username}
+                onChangeText={setUsername}
+                autoCapitalize="none"
+              />
               <TextInput
                 style={styles.input}
                 placeholder="email@domain.com"
