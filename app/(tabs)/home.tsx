@@ -2,28 +2,28 @@ import AppLogo from '@/components/app-logo';
 import FlameStreakBadge from '@/components/flame-streak-badge';
 import SideSlider from '@/components/side-slider';
 import {
-  loadCustomCategories,
-  mergeCategories,
-  saveCustomCategories,
-  type StoredCategoryOption,
+    loadCustomCategories,
+    mergeCategories,
+    saveCustomCategories,
+    type StoredCategoryOption,
 } from '@/constants/category-storage';
 import { supabase } from '@/constants/supabase';
 import { AntDesign, Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
-  Animated,
-  FlatList,
-  InteractionManager,
-  Modal,
-  PanResponder,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    Alert,
+    Animated,
+    FlatList,
+    InteractionManager,
+    Modal,
+    PanResponder,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from 'react-native';
 import { Calendar } from 'react-native-calendars';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -1498,8 +1498,8 @@ export default function HomeScreen() {
         <TouchableOpacity style={styles.tabItem}>
           <Feather name="clipboard" size={24} color="black" />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.tabItem} onPress={() => router.navigate('/(tabs)/profile')}>
-          <Feather name="user" size={24} color="black" />
+        <TouchableOpacity style={styles.tabItem} onPress={() => router.navigate('/(tabs)/friends')}>
+          <Feather name="users" size={24} color="black" />
         </TouchableOpacity>
       </View>
 

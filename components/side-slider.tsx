@@ -2,13 +2,13 @@ import { Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef } from 'react';
 import {
-    Animated,
-    Modal,
-    Pressable,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Animated,
+  Modal,
+  Pressable,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 
 type SideSliderProps = {
@@ -96,11 +96,10 @@ const styles = StyleSheet.create({
   },
   item: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
+    justifyContent: 'flex-start',
+    paddingVertical: 1,
     paddingHorizontal: 2,
-    minHeight: 50,
+    minHeight: 40,
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
   },

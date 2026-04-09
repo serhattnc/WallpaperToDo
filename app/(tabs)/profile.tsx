@@ -1,18 +1,21 @@
 import AppLogo from '@/components/app-logo';
 import FlameStreakBadge from '@/components/flame-streak-badge';
 import SideSlider from '@/components/side-slider';
+import { loadProfileAvatar, saveProfileAvatar } from '@/constants/friends-storage';
 import { supabase } from '@/constants/supabase';
 import { AntDesign, Feather } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-    ActivityIndicator,
-    Image,
-    InteractionManager,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Image,
+  InteractionManager,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -89,6 +92,8 @@ export default function ProfileScreen() {
   const router = useRouter();
   const [isSideMenuVisible, setIsSideMenuVisible] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState('');
   const [displayName, setDisplayName] = useState('Guest');
   const [email, setEmail] = useState('');
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
@@ -118,9 +123,17 @@ export default function ProfileScreen() {
     const avatarFromMeta = metadata.avatar_url || metadata.picture || null;
     const friendValue = Number(metadata.friends_count ?? metadata.friendsCount ?? 0);
 
+    const userId = user?.id || '';
+    setCurrentUserId(userId);
+
+    let avatarFromStorage: string | null = null;
+    if (userId) {
+      avatarFromStorage = await loadProfileAvatar(userId);
+    }
+
     setDisplayName(String(nameFromMeta));
     setEmail(session.user.email || '');
-    setAvatarUrl(typeof avatarFromMeta === 'string' ? avatarFromMeta : null);
+    setAvatarUrl(avatarFromStorage || (typeof avatarFromMeta === 'string' ? avatarFromMeta : null));
     setFriendsCount(Number.isFinite(friendValue) ? friendValue : 0);
 
     const { data, error } = await supabase
@@ -152,6 +165,42 @@ export default function ProfileScreen() {
     setLoading(false);
   }, [router]);
 
+  const handlePickAvatar = useCallback(async () => {
+    if (!currentUserId) {
+      Alert.alert('Hata', 'Profil bilgisi yuklenemedi. Lutfen tekrar dene.');
+      return;
+    }
+
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Izin Gerekli', 'Profil fotografi secmek icin galeri izni vermelisin.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+
+    if (result.canceled || !result.assets?.[0]?.uri) {
+      return;
+    }
+
+    try {
+      setIsUploadingAvatar(true);
+      const uploadedUrl = await saveProfileAvatar(currentUserId, result.assets[0].uri);
+      setAvatarUrl(uploadedUrl);
+      Alert.alert('Basarili', 'Profil fotografi guncellendi.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Avatar yuklenirken bir hata olustu.';
+      Alert.alert('Hata', message);
+    } finally {
+      setIsUploadingAvatar(false);
+    }
+  }, [currentUserId]);
+
   useEffect(() => {
     const handle = InteractionManager.runAfterInteractions(() => {
       fetchProfileData();
@@ -175,14 +224,28 @@ export default function ProfileScreen() {
       </View>
 
       <View style={styles.profileCard}>
-        <View style={styles.avatarWrap}>
-          {avatarUrl ? (
-            <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
-          ) : (
-            <View style={styles.avatarFallback}>
-              <Feather name="user" size={28} color="#111827" />
-            </View>
-          )}
+        <View style={styles.avatarContainer}>
+          <View style={styles.avatarWrap}>
+            {avatarUrl ? (
+              <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
+            ) : (
+              <View style={styles.avatarFallback}>
+                <Feather name="user" size={28} color="#111827" />
+              </View>
+            )}
+          </View>
+          <TouchableOpacity
+            style={styles.editAvatarButton}
+            onPress={handlePickAvatar}
+            disabled={isUploadingAvatar}
+            activeOpacity={0.85}
+          >
+            {isUploadingAvatar ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Feather name="edit-2" size={14} color="#FFFFFF" />
+            )}
+          </TouchableOpacity>
         </View>
 
         <Text style={styles.nameText}>{displayName}</Text>
@@ -230,9 +293,8 @@ export default function ProfileScreen() {
         <TouchableOpacity style={styles.tabItem}>
           <Feather name="clipboard" size={24} color="black" />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.tabItem} onPress={() => router.navigate('/(tabs)/profile')}>
-          <Feather name="user" size={24} color="black" />
-          <View style={styles.activeTabDot} />
+        <TouchableOpacity style={styles.tabItem} onPress={() => router.navigate('/(tabs)/friends')}>
+          <Feather name="users" size={24} color="black" />
         </TouchableOpacity>
       </View>
 
@@ -274,6 +336,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 14,
   },
+  avatarContainer: {
+    position: 'relative',
+    marginBottom: 12,
+  },
   avatarWrap: {
     width: 92,
     height: 92,
@@ -282,7 +348,19 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#111827',
     backgroundColor: '#FFFFFF',
-    marginBottom: 12,
+  },
+  editAvatarButton: {
+    position: 'absolute',
+    right: -6,
+    bottom: -2,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#111827',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   avatarImage: {
     width: '100%',

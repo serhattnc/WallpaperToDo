@@ -1470,8 +1470,8 @@ export default function CalendarScreen() {
         <TouchableOpacity style={styles.tabItem}>
           <Feather name="clipboard" size={24} color="black" />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.tabItem} onPress={() => router.navigate('/(tabs)/profile')}>
-          <Feather name="user" size={24} color="black" />
+        <TouchableOpacity style={styles.tabItem} onPress={() => router.navigate('/(tabs)/friends')}>
+          <Feather name="users" size={24} color="black" />
         </TouchableOpacity>
       </View>
 

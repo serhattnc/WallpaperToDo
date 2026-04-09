@@ -10,7 +10,6 @@ import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 
 export default function LoginScreen() {
-  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -54,17 +53,8 @@ export default function LoginScreen() {
     if (error) {
       Alert.alert('Login Error', error.message);
     } else {
-      const trimmedUsername = username.trim();
-      if (trimmedUsername) {
-        await supabase.auth.updateUser({
-          data: {
-            username: trimmedUsername,
-            full_name: trimmedUsername,
-          },
-        });
-      }
       // Navigate to main app
-      router.replace('/(tabs)/home'); 
+      router.replace('/(tabs)/home');
       Alert.alert('Success', 'Logged in successfully!');
     }
     setLoading(false);
@@ -94,14 +84,6 @@ export default function LoginScreen() {
             </View>
 
             <View style={styles.form}>
-              <TextInput
-                style={styles.input}
-                placeholder="username"
-                placeholderTextColor="#999"
-                value={username}
-                onChangeText={setUsername}
-                autoCapitalize="none"
-              />
               <TextInput
                 style={styles.input}
                 placeholder="email@domain.com"
