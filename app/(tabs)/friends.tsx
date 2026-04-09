@@ -16,7 +16,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   FlatList,
-  Image, StyleSheet,
+  Image, InteractionManager, StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
@@ -89,7 +89,10 @@ export default function FriendsScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      loadFriendList();
+      const handle = InteractionManager.runAfterInteractions(() => {
+        loadFriendList();
+      });
+      return () => handle.cancel();
     }, [loadFriendList])
   );
 
