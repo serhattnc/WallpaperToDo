@@ -201,6 +201,20 @@ export default function ProfileScreen() {
     }
   }, [currentUserId]);
 
+  const handleLogout = useCallback(() => {
+    Alert.alert('Çıkış Yap', 'Hesabınızdan çıkmak istediğinize emin misiniz?', [
+      { text: 'İptal', style: 'cancel' },
+      {
+        text: 'Çıkış',
+        style: 'destructive',
+        onPress: async () => {
+          await supabase.auth.signOut();
+          router.replace('/login');
+        },
+      },
+    ]);
+  }, [router]);
+
   useEffect(() => {
     const handle = InteractionManager.runAfterInteractions(() => {
       fetchProfileData();
@@ -221,6 +235,9 @@ export default function ProfileScreen() {
           <Feather name="menu" size={22} color="#111827" />
         </TouchableOpacity>
         <AppLogo size={40} />
+        <TouchableOpacity style={styles.headerLogoutButton} onPress={handleLogout}>
+          <Feather name="log-out" size={22} color="#EF4444" />
+        </TouchableOpacity>
       </View>
 
       <View style={styles.profileCard}>
@@ -328,6 +345,16 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     borderWidth: 0,
     backgroundColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerLogoutButton: {
+    position: 'absolute',
+    right: 0,
+    top: 6,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
   },

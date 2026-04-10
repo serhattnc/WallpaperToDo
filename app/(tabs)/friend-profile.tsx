@@ -1,45 +1,45 @@
 import AppLogo from '@/components/app-logo';
 import FlameStreakBadge from '@/components/flame-streak-badge';
 import {
-    loadCustomCategories,
-    mergeCategories,
-    saveCustomCategories,
-    type StoredCategoryOption,
+  loadCustomCategories,
+  mergeCategories,
+  saveCustomCategories,
+  type StoredCategoryOption,
 } from '@/constants/category-storage';
 import {
-    addFriendTask,
-    createFriendSubtask,
-    FriendTaskItem,
-    loadCanFriendSendTasks,
-    loadFriendProfile,
-    loadFriendStats,
-    loadFriendTasks,
-    parseFriendSchedule,
-    parseFriendSubtasks,
-    removeFriendTask,
-    saveCanFriendSendTasks,
-    serializeFriendSubtasks,
-    type SubtaskItem,
-    type TaskSchedule,
+  addFriendTask,
+  createFriendSubtask,
+  FriendTaskItem,
+  loadCanFriendSendTasks,
+  loadFriendProfile,
+  loadFriendStats,
+  loadFriendTasks,
+  parseFriendSchedule,
+  parseFriendSubtasks,
+  removeFriendTask,
+  saveCanFriendSendTasks,
+  serializeFriendSubtasks,
+  type SubtaskItem,
+  type TaskSchedule,
 } from '@/constants/friend-task-storage';
 import { AntDesign, Feather } from '@expo/vector-icons';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Animated,
-    Image,
-    InteractionManager,
-    Modal,
-    PanResponder,
-    ScrollView,
-    StyleSheet,
-    Switch,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Animated,
+  Image,
+  InteractionManager,
+  Modal,
+  PanResponder,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { Calendar } from 'react-native-calendars';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -70,12 +70,6 @@ const RECURRENCE_OPTIONS: { label: string; value: TaskSchedule['recurrence'] }[]
   { label: 'Hafta ici', value: 'weekday' },
   { label: 'Hafta sonu', value: 'weekend' },
 ];
-
-type FriendProfile = {
-  id: string;
-  username: string;
-  avatarUrl: string | null;
-};
 
 const resolveParam = (value?: string | string[]) => {
   if (Array.isArray(value)) return value[0] || '';
@@ -445,8 +439,6 @@ export default function FriendProfileScreen() {
     setAllowIncomingTasks(value);
     await saveCanFriendSendTasks(friendId, value);
   };
-
-  const headerInitial = useMemo(() => friendName.slice(0, 1).toUpperCase(), [friendName]);
 
   return (
     <SafeAreaView style={styles.container}>

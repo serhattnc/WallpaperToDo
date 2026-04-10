@@ -66,6 +66,16 @@ const SEARCH_DEBOUNCE_MS = 280;
 
 const escapeIlikePattern = (value: string) => value.replace(/[\\%_]/g, (match) => `\\${match}`);
 
+const resolveAvatarUrl = (value?: string | null) => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+
+  if (/^https?:\/\//i.test(raw)) return raw;
+
+  const { data } = supabase.storage.from('profile-avatars').getPublicUrl(raw);
+  return data?.publicUrl || null;
+};
+
 export default function FriendsScreen() {
   const router = useRouter();
   const [isSideMenuVisible, setIsSideMenuVisible] = useState(false);
@@ -161,10 +171,7 @@ export default function FriendsScreen() {
               .map((row) => ({
                 id: String((row as { id?: string }).id || ''),
                 username: String((row as { username?: string }).username || '').trim(),
-                avatarUrl:
-                  typeof (row as { avatar_url?: string | null }).avatar_url === 'string'
-                    ? ((row as { avatar_url?: string }).avatar_url as string)
-                    : null,
+                avatarUrl: resolveAvatarUrl((row as { avatar_url?: string | null }).avatar_url),
               }))
               .filter((item) => item.id.length > 0 && item.username.length > 0)
               .filter((item) => item.id !== currentUserId);

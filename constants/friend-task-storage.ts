@@ -34,6 +34,7 @@ const FRIEND_TASK_PERMISSION_TABLE_CANDIDATES = ['friend_task_permissions', 'use
 const FRIEND_CAN_SEND_KEY_PREFIX = '@wallpapertodo:friend_can_send_tasks_v1';
 const FRIEND_REQUEST_TABLE_CANDIDATES = ['friend_requests', 'user_friend_requests'];
 const PROFILE_TABLE_CANDIDATES = ['profiles', 'user_profiles'];
+const PROFILE_AVATAR_BUCKET = 'profile-avatars';
 const TABLE_RESOLVE_RECHECK_MS = 20000;
 
 let cachedFriendRequestTable: string | null | undefined;
@@ -95,6 +96,18 @@ type SimpleProfile = {
 
 const buildKey = (prefix: string, currentUserId: string, friendId: string) =>
   `${prefix}:${currentUserId}:${friendId}`;
+
+const resolveAvatarUrl = (value?: string | null) => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+
+  if (/^https?:\/\//i.test(raw)) {
+    return raw;
+  }
+
+  const { data } = supabase.storage.from(PROFILE_AVATAR_BUCKET).getPublicUrl(raw);
+  return data?.publicUrl || null;
+};
 
 const getAuthUserId = async () => {
   const {
@@ -218,7 +231,7 @@ const loadProfileById = async (userId: string) => {
   return {
     id: String(row.id || userId),
     username: String(row.username || '').trim(),
-    avatarUrl: typeof row.avatar_url === 'string' ? row.avatar_url : null,
+    avatarUrl: resolveAvatarUrl(row.avatar_url),
   };
 };
 
@@ -245,7 +258,7 @@ const loadProfilesByIds = async (userIds: string[]) => {
     profiles.set(String(typed.id), {
       id: String(typed.id),
       username: String(typed.username || '').trim(),
-      avatarUrl: typeof typed.avatar_url === 'string' ? typed.avatar_url : null,
+      avatarUrl: resolveAvatarUrl(typed.avatar_url),
     });
   });
 

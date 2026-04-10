@@ -55,7 +55,6 @@ export default function LoginScreen() {
     } else {
       // Navigate to main app
       router.replace('/(tabs)/home');
-      Alert.alert('Success', 'Logged in successfully!');
     }
     setLoading(false);
   };

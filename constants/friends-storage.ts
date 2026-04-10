@@ -1,6 +1,6 @@
-import { supabase, supabaseAnonKey, supabaseUrl } from '@/constants/supabase';
+import { supabase } from '@/constants/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 
 export type FriendItem = {
   id: string;
@@ -37,6 +37,18 @@ type ProfileRow = {
   id?: string;
   username?: string;
   avatar_url?: string | null;
+};
+
+const resolveAvatarPublicUrl = (value?: string | null) => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+
+  if (/^https?:\/\//i.test(raw)) {
+    return raw;
+  }
+
+  const { data } = supabase.storage.from(PROFILE_AVATAR_BUCKET).getPublicUrl(raw);
+  return data?.publicUrl || null;
 };
 
 const normalizeUsername = (value: string) =>
@@ -131,7 +143,7 @@ const loadProfilesByIds = async (ids: string[]) => {
 
     map.set(id, {
       username,
-      avatarUrl: typeof typedRow.avatar_url === 'string' ? typedRow.avatar_url : null,
+      avatarUrl: resolveAvatarPublicUrl(typedRow.avatar_url),
     });
   });
 
@@ -411,15 +423,9 @@ export const rejectIncomingRequest = async (requestId: string) => {
 const buildProfileAvatarKey = (userId: string) => `${PROFILE_AVATAR_STORAGE_KEY_PREFIX}:${userId}`;
 
 const resolveAvatarUrl = (value?: string | null) => {
-  const raw = String(value || '').trim();
-  if (!raw) return null;
-
-  if (/^https?:\/\//i.test(raw)) {
-    return raw;
-  }
-
-  const { data } = supabase.storage.from(PROFILE_AVATAR_BUCKET).getPublicUrl(raw);
-  return data?.publicUrl || null;
+  const publicUrl = resolveAvatarPublicUrl(value);
+  if (!publicUrl) return null;
+  return `${publicUrl}?t=${Date.now()}`;
 };
 
 const loadProfileAvatarFromTable = async (userId: string) => {
@@ -448,17 +454,32 @@ const loadProfileAvatarFromTable = async (userId: string) => {
 
 const saveProfileAvatarInTable = async (userId: string, avatarUrl: string) => {
   for (const tableName of PROFILE_TABLE_CANDIDATES) {
-    const { error } = await supabase.from(tableName).upsert(
-      {
-        id: userId,
-        avatar_url: avatarUrl,
-      },
-      {
-        onConflict: 'id',
-      }
-    );
+    try {
+      // 1. Try to update an existing row first (avoids touching the unique username column)
+      const { error: updateError, data } = await supabase
+        .from(tableName)
+        .update({ avatar_url: avatarUrl })
+        .eq('id', userId)
+        .select();
 
-    if (!error) return true;
+      // If update was successful and a row was modified, we're done
+      if (!updateError && data && data.length > 0) return true;
+
+      // 2. If no row exists, we need to insert. We provide a default username to satisfy NOT NULL or UNIQUE constraints
+      // (Using a random string to avoid unique constraint collisions)
+      const randomUsername = `user_${Math.random().toString(36).slice(2, 10)}`;
+      const { error: insertError } = await supabase
+        .from(tableName)
+        .insert({
+          id: userId,
+          avatar_url: avatarUrl,
+          username: randomUsername
+        });
+
+      if (!insertError) return true;
+    } catch {
+      continue;
+    }
   }
 
   return false;
@@ -494,38 +515,54 @@ export const saveProfileAvatar = async (userId: string, uri: string) => {
     throw new Error('Oturum bilgisi gecersiz, tekrar giris yap.');
   }
 
-  const { extension, contentType } = detectContentTypeFromUri(uri);
-  const objectPath = `${userId}/avatar.${extension}`;
+  try {
+    const { extension, contentType } = detectContentTypeFromUri(uri);
+    // Use a unique filename each upload to avoid UPDATE permissions on storage.objects.
+    const objectPath = `${userId}/avatar-${Date.now()}.${extension}`;
 
-  const uploadUrl = `${supabaseUrl}/storage/v1/object/${PROFILE_AVATAR_BUCKET}/${objectPath}`;
+    // Read file as base64
+    const base64 = await FileSystem.readAsStringAsync(uri, {
+      encoding: 'base64',
+    });
+    
+    // Convert base64 to Uint8Array
+    const binaryString = atob(base64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
 
-  const uploadResult = await FileSystem.uploadAsync(uploadUrl, uri, {
-    httpMethod: 'POST',
-    uploadType: 0,
-    headers: {
-      Authorization: `Bearer ${session.access_token}`,
-      apikey: supabaseAnonKey,
-      'Content-Type': contentType,
-      'x-upsert': 'true',
-    },
-  });
+    // Upload using Supabase SDK
+    const { error: uploadError } = await supabase.storage
+      .from(PROFILE_AVATAR_BUCKET)
+      .upload(objectPath, bytes, {
+        contentType: contentType,
+        upsert: false,
+      });
 
-  if (uploadResult.status < 200 || uploadResult.status >= 300) {
-    throw new Error(`Avatar yuklenemedi (${uploadResult.status}).`);
+    if (uploadError) {
+      throw new Error(`Avatar yuklenemedi: ${uploadError.message}`);
+    }
+
+    const { data } = supabase.storage.from(PROFILE_AVATAR_BUCKET).getPublicUrl(objectPath);
+    const publicUrl = data?.publicUrl || null;
+
+    if (!publicUrl) {
+      throw new Error('Avatar URL olusturulamadi.');
+    }
+
+    // Save only the object path to database (not the full URL)
+    const saved = await saveProfileAvatarInTable(userId, objectPath);
+    if (!saved) {
+      throw new Error('Profil tablosu avatar guncellenemedi.');
+    }
+
+    // Add cache busting parameter to force refresh
+    const cachedBustingUrl = `${publicUrl}?t=${Date.now()}`;
+    await AsyncStorage.setItem(buildProfileAvatarKey(userId), cachedBustingUrl);
+    return cachedBustingUrl;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Avatar yuklenirken bir hata olustu.';
+    throw new Error(message);
   }
-
-  const { data } = supabase.storage.from(PROFILE_AVATAR_BUCKET).getPublicUrl(objectPath);
-  const publicUrl = data?.publicUrl || null;
-
-  if (!publicUrl) {
-    throw new Error('Avatar URL olusturulamadi.');
-  }
-
-  const saved = await saveProfileAvatarInTable(userId, publicUrl);
-  if (!saved) {
-    throw new Error('Profil tablosu avatar guncellenemedi.');
-  }
-
-  await AsyncStorage.setItem(buildProfileAvatarKey(userId), publicUrl);
-  return publicUrl;
 };

@@ -236,12 +236,6 @@ insert into storage.buckets (id, name, public)
 values ('profile-avatars', 'profile-avatars', true)
 on conflict (id) do update set public = excluded.public;
 
-drop policy if exists "profile_avatars_read_public" on storage.objects;
-create policy "profile_avatars_read_public"
-on storage.objects
-for select
-using (bucket_id = 'profile-avatars');
-
 drop policy if exists "profile_avatars_insert_own" on storage.objects;
 create policy "profile_avatars_insert_own"
 on storage.objects
