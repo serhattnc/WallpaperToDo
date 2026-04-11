@@ -23,6 +23,7 @@ export default function RootLayout() {
         <Stack.Screen name="(tabs)/friends" options={{ headerShown: false }} />
         <Stack.Screen name="(tabs)/friend-profile" options={{ headerShown: false }} />
         <Stack.Screen name="(tabs)/profile" options={{ headerShown: false }} />
+        <Stack.Screen name="edit-profile" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
       </Stack>
       <StatusBar style="auto" />

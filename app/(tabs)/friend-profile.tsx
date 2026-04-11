@@ -465,7 +465,6 @@ export default function FriendProfileScreen() {
           )}
 
           <Text style={styles.friendName}>{friendName}</Text>
-          <Text style={styles.friendLabel}>Arkadas profili</Text>
 
           <View style={styles.statsRow}>
             <View style={styles.statCard}>
@@ -477,8 +476,7 @@ export default function FriendProfileScreen() {
               <Text style={styles.statLabel}>Tamamlanan</Text>
             </View>
             <View style={styles.statCard}>
-              <FlameStreakBadge days={streakDays} size={46} />
-              <Text style={styles.statLabel}>Gunluk flame</Text>
+              <FlameStreakBadge days={streakDays} size={55} />
             </View>
           </View>
         </View>

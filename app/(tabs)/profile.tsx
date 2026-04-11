@@ -1,17 +1,19 @@
 import AppLogo from '@/components/app-logo';
 import FlameStreakBadge from '@/components/flame-streak-badge';
 import SideSlider from '@/components/side-slider';
-import { loadProfileAvatar, saveProfileAvatar } from '@/constants/friends-storage';
+import { saveMyAvailabilityForFriends } from '@/constants/friend-task-storage';
+import { loadProfileAvatar } from '@/constants/friends-storage';
 import { supabase } from '@/constants/supabase';
 import { AntDesign, Feather } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
+import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Image,
-  InteractionManager,
+  Modal,
+  Pressable,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -92,11 +94,12 @@ export default function ProfileScreen() {
   const router = useRouter();
   const [isSideMenuVisible, setIsSideMenuVisible] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
-  const [currentUserId, setCurrentUserId] = useState('');
   const [displayName, setDisplayName] = useState('Guest');
   const [email, setEmail] = useState('');
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [isAvailable, setIsAvailable] = useState(true);
+  const [statusSheetVisible, setStatusSheetVisible] = useState(false);
+  const [statusUpdating, setStatusUpdating] = useState(false);
   const [completedTasks, setCompletedTasks] = useState(0);
   const [friendsCount, setFriendsCount] = useState(0);
   const [streakDays, setStreakDays] = useState(0);
@@ -121,10 +124,11 @@ export default function ProfileScreen() {
     const nameFromMeta =
       metadata.full_name || metadata.name || metadata.given_name || session.user.email?.split('@')[0] || 'Guest';
     const avatarFromMeta = metadata.avatar_url || metadata.picture || null;
+    const availabilityFromMeta =
+      metadata.availability_status === 'busy' || metadata.is_available === false ? false : true;
     const friendValue = Number(metadata.friends_count ?? metadata.friendsCount ?? 0);
 
     const userId = user?.id || '';
-    setCurrentUserId(userId);
 
     let avatarFromStorage: string | null = null;
     if (userId) {
@@ -134,6 +138,7 @@ export default function ProfileScreen() {
     setDisplayName(String(nameFromMeta));
     setEmail(session.user.email || '');
     setAvatarUrl(avatarFromStorage || (typeof avatarFromMeta === 'string' ? avatarFromMeta : null));
+    setIsAvailable(availabilityFromMeta);
     setFriendsCount(Number.isFinite(friendValue) ? friendValue : 0);
 
     const { data, error } = await supabase
@@ -165,42 +170,6 @@ export default function ProfileScreen() {
     setLoading(false);
   }, [router]);
 
-  const handlePickAvatar = useCallback(async () => {
-    if (!currentUserId) {
-      Alert.alert('Hata', 'Profil bilgisi yuklenemedi. Lutfen tekrar dene.');
-      return;
-    }
-
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert('Izin Gerekli', 'Profil fotografi secmek icin galeri izni vermelisin.');
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.8,
-    });
-
-    if (result.canceled || !result.assets?.[0]?.uri) {
-      return;
-    }
-
-    try {
-      setIsUploadingAvatar(true);
-      const uploadedUrl = await saveProfileAvatar(currentUserId, result.assets[0].uri);
-      setAvatarUrl(uploadedUrl);
-      Alert.alert('Basarili', 'Profil fotografi guncellendi.');
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Avatar yuklenirken bir hata olustu.';
-      Alert.alert('Hata', message);
-    } finally {
-      setIsUploadingAvatar(false);
-    }
-  }, [currentUserId]);
-
   const handleLogout = useCallback(() => {
     Alert.alert('Çıkış Yap', 'Hesabınızdan çıkmak istediğinize emin misiniz?', [
       { text: 'İptal', style: 'cancel' },
@@ -215,13 +184,39 @@ export default function ProfileScreen() {
     ]);
   }, [router]);
 
-  useEffect(() => {
-    const handle = InteractionManager.runAfterInteractions(() => {
-      fetchProfileData();
+  const handleSelectAvailability = useCallback(async (nextAvailable: boolean) => {
+    if (statusUpdating) {
+      return;
+    }
+
+    const previous = isAvailable;
+    setIsAvailable(nextAvailable);
+    setStatusUpdating(true);
+
+    const { error } = await supabase.auth.updateUser({
+      data: {
+        availability_status: nextAvailable ? 'available' : 'busy',
+        is_available: nextAvailable,
+      },
     });
 
-    return () => handle.cancel();
-  }, [fetchProfileData]);
+    if (error) {
+      setIsAvailable(previous);
+      Alert.alert('Hata', error.message);
+      setStatusUpdating(false);
+      return;
+    }
+
+    await saveMyAvailabilityForFriends(nextAvailable);
+    setStatusUpdating(false);
+    setStatusSheetVisible(false);
+  }, [isAvailable, statusUpdating]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchProfileData();
+    }, [fetchProfileData])
+  );
 
   const headerSubtitle = useMemo(() => {
     if (!email) return 'Google hesabiniz ile bagli profil';
@@ -252,21 +247,18 @@ export default function ProfileScreen() {
             )}
           </View>
           <TouchableOpacity
-            style={styles.editAvatarButton}
-            onPress={handlePickAvatar}
-            disabled={isUploadingAvatar}
+            style={[styles.availabilityDot, isAvailable ? styles.availabilityOnline : styles.availabilityOffline]}
+            onPress={() => setStatusSheetVisible(true)}
             activeOpacity={0.85}
-          >
-            {isUploadingAvatar ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
-            ) : (
-              <Feather name="edit-2" size={14} color="#FFFFFF" />
-            )}
-          </TouchableOpacity>
+          />
         </View>
 
         <Text style={styles.nameText}>{displayName}</Text>
         <Text style={styles.emailText}>{headerSubtitle}</Text>
+        <TouchableOpacity style={styles.editProfileButton} onPress={() => router.push('/edit-profile')} activeOpacity={0.9}>
+          <Feather name="edit-3" size={14} color="#FFFFFF" style={styles.editProfileButtonIcon} />
+          <Text style={styles.editProfileButtonText}>Profili Degistir</Text>
+        </TouchableOpacity>
       </View>
 
       {loading ? (
@@ -320,6 +312,47 @@ export default function ProfileScreen() {
         onClose={() => setIsSideMenuVisible(false)}
         currentRoute="profile"
       />
+
+      <Modal
+        visible={statusSheetVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setStatusSheetVisible(false)}
+      >
+        <Pressable style={styles.statusSheetBackdrop} onPress={() => setStatusSheetVisible(false)}>
+          <View style={styles.statusSheetCard}>
+            <Text style={styles.statusSheetTitle}>Musaitlik Durumu</Text>
+
+            <View style={styles.statusOptionsCard}>
+              <TouchableOpacity
+                style={styles.statusOptionRow}
+                onPress={() => handleSelectAvailability(true)}
+                disabled={statusUpdating}
+              >
+                <View style={styles.statusOptionLeft}>
+                  <View style={[styles.statusOptionDot, styles.availabilityOnline]} />
+                  <Text style={styles.statusOptionText}>Musait</Text>
+                </View>
+                <View style={[styles.statusSelectCircle, isAvailable && styles.statusSelectCircleActive]} />
+              </TouchableOpacity>
+
+              <View style={styles.statusOptionDivider} />
+
+              <TouchableOpacity
+                style={styles.statusOptionRow}
+                onPress={() => handleSelectAvailability(false)}
+                disabled={statusUpdating}
+              >
+                <View style={styles.statusOptionLeft}>
+                  <View style={[styles.statusOptionDot, styles.availabilityOffline]} />
+                  <Text style={styles.statusOptionText}>Musait Degil</Text>
+                </View>
+                <View style={[styles.statusSelectCircle, !isAvailable && styles.statusSelectCircleActive]} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -376,18 +409,21 @@ const styles = StyleSheet.create({
     borderColor: '#111827',
     backgroundColor: '#FFFFFF',
   },
-  editAvatarButton: {
+  availabilityDot: {
     position: 'absolute',
-    right: -6,
-    bottom: -2,
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: '#111827',
+    right: 4,
+    top: 4,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
     borderWidth: 2,
     borderColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
+  },
+  availabilityOnline: {
+    backgroundColor: '#22C55E',
+  },
+  availabilityOffline: {
+    backgroundColor: '#EF4444',
   },
   avatarImage: {
     width: '100%',
@@ -408,6 +444,24 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontSize: 13,
     color: '#6B7280',
+  },
+  editProfileButton: {
+    marginTop: 12,
+    backgroundColor: '#111111',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  editProfileButtonIcon: {
+    marginRight: 8,
+  },
+  editProfileButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
   },
   loadingWrap: {
     flex: 1,
@@ -488,5 +542,70 @@ const styles = StyleSheet.create({
   },
   streakday:{
     paddingBottom: 400,
-  }
+  },
+  statusSheetBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.15)',
+  },
+  statusSheetCard: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 40,
+  },
+  statusSheetTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#111827',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  statusOptionsCard: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 4,
+  },
+  statusOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+  },
+  statusOptionLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  statusOptionDivider: {
+    height: 1,
+    backgroundColor: '#E5E7EB',
+  },
+  statusOptionDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    marginRight: 10,
+  },
+  statusOptionText: {
+    fontSize: 15,
+    color: '#111827',
+    fontWeight: '600',
+  },
+  statusSelectCircle: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#9CA3AF',
+    backgroundColor: 'transparent',
+  },
+  statusSelectCircleActive: {
+    borderColor: '#111827',
+    backgroundColor: '#111827',
+  },
 });

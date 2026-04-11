@@ -9,9 +9,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 
+const TEST_EMAIL_ONLY_PASSWORD = 'TestOnly_EmailLogin_2026!';
+
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
@@ -44,18 +45,46 @@ export default function LoginScreen() {
   };
 
   const handleLogin = async () => {
+    const trimmedEmail = email.trim().toLowerCase();
+    if (!trimmedEmail) {
+      Alert.alert('Login Error', 'Please enter your email address.');
+      return;
+    }
+
     setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email: trimmedEmail,
+      password: TEST_EMAIL_ONLY_PASSWORD,
     });
 
-    if (error) {
-      Alert.alert('Login Error', error.message);
+    if (!signInError) {
+      router.replace('/(tabs)/home');
+      setLoading(false);
+      return;
+    }
+
+    const { error: signUpError } = await supabase.auth.signUp({
+      email: trimmedEmail,
+      password: TEST_EMAIL_ONLY_PASSWORD,
+    });
+
+    if (signUpError) {
+      Alert.alert('Login Error', signUpError.message);
+      setLoading(false);
+      return;
+    }
+
+    const { error: secondSignInError } = await supabase.auth.signInWithPassword({
+      email: trimmedEmail,
+      password: TEST_EMAIL_ONLY_PASSWORD,
+    });
+
+    if (secondSignInError) {
+      Alert.alert('Login Error', secondSignInError.message);
     } else {
-      // Navigate to main app
       router.replace('/(tabs)/home');
     }
+
     setLoading(false);
   };
 
@@ -91,14 +120,6 @@ export default function LoginScreen() {
                 onChangeText={setEmail}
                 autoCapitalize="none"
                 keyboardType="email-address"
-              />
-              <TextInput
-                style={styles.input}
-                placeholder="password"
-                placeholderTextColor="#999"
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
               />
               
               <TouchableOpacity style={styles.primaryButton} onPress={handleLogin} disabled={loading}>

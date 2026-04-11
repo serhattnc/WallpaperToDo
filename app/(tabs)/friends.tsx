@@ -368,7 +368,6 @@ export default function FriendsScreen() {
                 )}
                 <View style={styles.friendNameWrap}>
                   <Text style={styles.friendName}>{item.username}</Text>
-                  <Text style={styles.friendSubtitle}>Gorev ver</Text>
                 </View>
                 <Feather name="chevron-right" size={18} color="#9CA3AF" />
               </TouchableOpacity>
@@ -530,7 +529,6 @@ const styles = StyleSheet.create({
   },
   friendNameWrap: {
     flex: 1,
-    marginLeft: 12,
   },
   avatar: {
     width: 40,
@@ -552,14 +550,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   friendName: {
+    paddingLeft: 12,
     fontSize: 16,
     color: '#111827',
     fontWeight: '600',
-  },
-  friendSubtitle: {
-    marginTop: 2,
-    fontSize: 12,
-    color: '#6B7280',
   },
   removeButton: {
     width: 34,

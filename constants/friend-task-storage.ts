@@ -660,6 +660,20 @@ export const addFriendTask = async (
   const sender = await loadCurrentUserProfile();
   if (!sender) return [] as FriendTaskItem[];
 
+  const permissionTable = await resolveFriendTaskPermissionTable();
+  if (permissionTable) {
+    const { data } = await supabase
+      .from(permissionTable)
+      .select('can_send')
+      .eq('owner_id', friendId)
+      .eq('friend_id', sender.id)
+      .maybeSingle();
+
+    if (data && (data as FriendTaskPermissionRow).can_send === false) {
+      throw new Error('Bu kisi musait degil. Su anda gorev veremezsin.');
+    }
+  }
+
   const nextTask: FriendTaskItem = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     task: payload.task.trim(),
@@ -746,4 +760,30 @@ export const saveCanFriendSendTasks = async (friendId: string, canSend: boolean)
   }
 
   await writeJson(buildKey(FRIEND_CAN_SEND_KEY_PREFIX, currentUserId, friendId), canSend);
+};
+
+export const saveMyAvailabilityForFriends = async (isAvailable: boolean) => {
+  const currentUserId = await getAuthUserId();
+  if (!currentUserId) return;
+
+  const friendIds = await loadAcceptedFriendIds(currentUserId);
+  if (friendIds.length === 0) return;
+
+  const tableName = await resolveFriendTaskPermissionTable();
+  if (tableName) {
+    const rows = friendIds.map((friendId) => ({
+      owner_id: currentUserId,
+      friend_id: friendId,
+      can_send: isAvailable,
+    }));
+
+    await supabase.from(tableName).upsert(rows);
+    return;
+  }
+
+  await Promise.all(
+    friendIds.map((friendId) =>
+      writeJson(buildKey(FRIEND_CAN_SEND_KEY_PREFIX, currentUserId, friendId), isAvailable)
+    )
+  );
 };
